@@ -1,161 +1,205 @@
-Mbassador
+[![build status](https://travis-ci.org/bennidi/mbassador.svg?branch=master)](https://travis-ci.org/bennidi/mbassador)
+[![maven central](https://img.shields.io/maven-central/v/net.engio/mbassador.svg)](https://maven-badges.herokuapp.com/maven-central/net.engio/mbassador)
+[![javadoc](http://www.javadoc.io/badge/net.engio/mbassador.svg)](http://www.javadoc.io/doc/net.engio/mbassador)
+[![wiki](assets/wiki.png?raw=true)](wiki)
+
+
+MBassador
 =========
 
-Mbassador is a very light-weight message (event) bus implementation following the publish subscribe pattern. It is designed
-for ease of use and aims to be feature rich, extensible while preserving resource efficiency and performance.
+MBassador is a light-weight, high-performance event bus implementing the [publish subscribe pattern](https://en.wikipedia.org/wiki/Publish-subscribe_pattern). It is designed for ease of use and aims to be feature rich and extensible while preserving resource efficiency and performance. 
 
-It uses a specialized data structure to allow high throughput for concurrent access.
+The core of MBassador is built around a *custom data structure* that provides **non-blocking reads** and minimized lock contention for writes such that performance degradation of concurrent read/write access is minimal. Benchmarks that illustrate the advantages of this design are available in this [github repository](https://github.com/bennidi/eventbus-performance).
 
-Read this documentation to get an overview of its features and how cool this message (event) bus actually is.
-You can also check out the <a href="http://codeblock.engio.net/?p=37" target="_blank">performance comparison</a>
-which also contains a partial list of the features of the compared implementations.
+[![wiki](https://github.com/bennidi/eventbus-performance/blob/master/results/ReadWriteHighConcurrency/mbassador-1.3.0/chart.jpg?raw=true)](wiki)
 
-The current version is 1.0.5.RC
-
-Table of contents:
-+ [Features](#features)
-+ [Usage](#usage)
-+ [Installation](#installation)
-+ [Roadmap](#roadmap)
-+ [Credits](#credits)
-+ [Contribute](#contribute)
-+ [License](#license)
+The code is **production ready**: 86% instruction coverage, 82% branch coverage with randomized and concurrently run test sets, no major bug has been reported in the last 18 month. No modifications to the core will be made without thoroughly testing the code.
 
 
-<h2 name="features">Features</h2>
-
-At its core MBassador offers the following features:
-
-+ <em><strong>Annotation driven</em></strong>: To define and customize a message handler simply mark it with @Listener annotation
-+ <em><strong>Delivers everything</em></strong>: Messages must not implement any interface and can be of any type (-> message bus is typed using generics with upper
-bound being Object.class). The class hierarchy of a message is considered during message delivery. This means that listeners will also receive
-subtypes of the message type they are listening for, e.g. a listener for Object.class receives everything.
-+ <em><strong>Synchronous and asynchronous message delivery</em></strong>: A handler can be invoked to handle a message either synchronously or
-asynchronously. This is configurable for each handler via annotations. Message publication itself supports synchronous (method
-blocks until messages are delivered to all handlers) or asynchronous (fire and forget) dispatch
-+ <em><strong>Weak references</em></strong>: Mbassador uses weak references to all listening objects to relieve the programmer of the burden to explicitly unregister
-listeners that are not used anymore (of course it is also possible to explicitly unregister a listener if needed). This is very comfortable
-in certain environments where objects are created by frameworks, i.e. spring, guice etc. Just stuff everything into the message bus, it will
-ignore objects without message handlers and automatically clean-up orphaned weak references after the garbage collector has done its job.
-+ <em><strong>Filtering</em></strong>: Mbassador offers static message filtering. Filters are configured using annotations and multiple filters can be attached to
-a single message handler
-+ <em><strong>Message envelopes</em></strong>: Message handlers can declare to receive an enveloped message. The envelope can wrap around different
-types of messages. This allows for a single handler to handle multiple message types
-+ <em><strong>Handler priorities</em></strong>: A listener can be associated with a priority to influence the order of the message delivery
-+ <em><strong>Error handling</em></strong>: Errors during message delivery are sent to an error handler of which a custom implementation can easily be plugged-in.
-+ <em><strong>Ease of Use</em></strong>: Using Mbassador in your project is very easy. Create as many instances of Mbassador as you like (usually a singleton will do),
-mark and configure your message handlers with @Listener annotations and finally register the listeners at any Mbassador instance. Start
-sending messages to your listeners using one of Mbassador's publication methods (sync or async). Done!
-
-
+[Usage](#usage) | [Features](#features) | [Installation](#installation) | [Wiki](#wiki) | [Release Notes](#./changelog) | [Integrations](#integrations) | [Credits](#credits) | [Contribute](#contribute) | [License](#license)
 
 <h2>Usage</h2>
 
-Listener definition (in any bean):
+Using MBassador in your project is very easy. Create as many instances of MBassador as you like (usually a singleton will do) ` bus = new MBassador()`, mark and configure your message handlers with `@Handler` annotations and finally register the listeners at any MBassador instance `bus.subscribe(aListener)`. Start sending messages to your listeners using one of MBassador's publication methods `bus.post(message).now()` or `bus.post(message).asynchronously()`.
 
-        // every event of type TestEvent or any subtype will be delivered
-        // to this handler
-        @Listener
-		public void handleTestEvent(TestEvent event) {
-			// do something
-		}
+As a first reference, consider this illustrative example. You might want to have a look at the collection of [examples](./examples) to see its features on more detail.
 
-        // this handler will be invoked asynchronously
-		@Listener(dispatch = Mode.Asynchronous)
-		public void handleSubTestEvent(SubTestEvent event) {
-            // do something more expensive here
-		}
+```java
+      
+// Define your handlers
 
-		// this handler will receive events of type SubTestEvent
-        // or any subtabe and that passes the given filter(s)
-        @Listener(priority = 10,
-                  dispatch = Mode.Synchronous,
-                  filters = {@Filter(MessageFilter.None.class),@Filter(MessageFilter.All.class)})
-        public void handleFiltered(SubTestEvent event) {
-           //do something special here
+@Listener(references = References.Strong)
+class SimpleFileListener{
+
+    @Handler
+    public void handle(File file){
+      // do something with the file
+    }
+    
+    @Handler(delivery = Invoke.Asynchronously)
+    public void expensiveOperation(File file){
+      // do something with the file
+    }
+    
+    @Handler(condition = "msg.size >= 10000")
+    @Enveloped(messages = {HashMap.class, LinkedList.class})
+    public void handleLarge(MessageEnvelope envelope) {
+       // handle objects without common super type
+    }
+
+}
+
+// somewhere else in your code
+
+MBassador bus = new MBassador();
+bus.subscribe (new SimpleFileListener());
+bus.post(new File("/tmp/smallfile.csv")).now();
+bus.post(new File("/tmp/bigfile.csv")).asynchronously();
+
+```   
+
+## Features
+
+
+> Annotation driven
+
+|Annotation|Function|
+|:-----|:-----|
+|`@Handler`|Mark a method as message handler|
+|`@Listener`|Can be used to customize listener wide configuration like the used reference type|
+|`@Enveloped`|A message envelope can be used to pass messages of different types into a single handler|
+|`@Filter`|Add filtering to prevent certain messages from being published|
+
+> Delivers everything, respects type hierarchy
+
+Messages do not need to implement any interface and can be of any type. The class hierarchy of a message is considered during message delivery, such that handlers will also receive subtypes of the message type they consume for - e.g. a handler of Object.class receives everything. Messages that do not match any handler result in the publication of a `DeadMessage` object which wraps the original message. DeadMessage events can be handled by registering listeners that handle DeadMessage.
+
+> Synchronous and asynchronous message delivery
+
+There are **two types of (a-)synchronicity** when using MBassador: message dispatch and handler invocation. 
+**Message dispatch** 
+
+_Synchronous_ dispatch means that the publish method blocks until all handlers have been *processed*. Note: This does not necessarily imply that each handler has been invoked and received the message - due to the possibility to combine synchronous dispatch with asynchronous handlers. This is the semantics of `publish(Object obj)` and `post(Objec obj).now()`
+
+_Asynchronous_ dispatch means that the publish method returns immediately and the message will be dispatched in another thread (fire and forget). This is the semantics of `publishAsync(Object obj)` and `post(Objec obj).asynchronously()`
+
+**Handler invocation**
+
+_Synchronous_ handlers are invoked sequentially and from the same thread within a running publication. _Asynchronous_ handlers means that the actual handler invocation is pushed to a queue that is processed by a pool of worker threads.
+
+> Configurable reference types
+
+By default, MBassador uses **weak references** for listeners to relieve the programmer of the need to explicitly unsubscribe listeners that are not used anymore and **avoid memory-leaks**. This is very comfortable in container managed environments where listeners are created and destroyed by frameworks, i.e. Spring, Guice etc. Just add everything to the bus, it will ignore objects without handlers and automatically clean-up orphaned weak references after the garbage collector has done its job. 
+
+Instead of using weak references, a listener can be configured to be referenced using strong references using `@Listener(references=References.Strong)`. Strongly referenced listeners will stick around until explicitly unsubscribed.
+
+> Message filtering
+
+MBassador offers static message filtering. Filters are configured using annotations and multiple filters can be attached to a single message handler. Since version 1.2.0 Java EL expressions in `@Handler` are another way to define conditional message dispatch. Messages that have matching handlers but do not pass the configured filters result in the publication of a FilteredMessage object which wraps the original message. FilteredMessage events can be handled by registering listeners that handle FilteredMessage.
+
+Note: Since version 1.3.1 it is possible to wrap a filter in a custom annotation for reuse
+
+```java
+
+
+
+
+    public static final class RejectAllFilter implements IMessageFilter {
+
+        @Override
+        public boolean accepts(Object event,  SubscriptionContext context) {
+            return false;
+        }
+    }
+
+    @IncludeFilters({@Filter(RejectAllFilter.class)})
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface RejectAll {}
+    
+    public static class FilteredMessageListener{
+    
+        // will cause republication of a FilteredEvent
+        @Handler
+        @RejectAll
+        public void handleNone(Object any){
+            FilteredEventCounter.incrementAndGet();
         }
 
-        @Listener(dispatch = Mode.Synchronous, filters = @Filter(Filters.RejectSubtypes.class))
-        @Enveloped(messages = {TestEvent.class, TestEvent2.class})
-        public void handleSuperTypeEvents(MessageEnvelope envelope) {
-            // detect the type of event here and then decide the course of action
-        }
+        
+    }
 
 
-Creation of message bus and registration of listeners:
+```
 
-        // create as many instances as necessary
-        // bind it to any upper bound
-        MBassador<TestEvent> bus = new MBassador<TestEvent>(BusConfiguration.Default());
-        ListeningBean listener = new ListeningBean();
-        // the listener will be registered using a weak-reference
-        bus.subscribe(listener);
-        // objects without handlers will be ignored
-        bus.subscribe(new ClassWithoutAnyDefinedHandlers());
+> Enveloped messages
 
+Message handlers can declare to receive an enveloped message using `Enveloped`. The envelope can wrap different types of messages to allow a single handler to handle multiple, unrelated message types.
 
-Message publication:
+> Handler priorities
 
-        TestEvent event = new TestEvent();
-        TestEvent subEvent = new SubTestEvent();
+A handler can be associated with a priority to influence the order in which messages are delivered when multiple matching handlers exist
 
-        bus.publishAsync(event); //returns immediately, publication will continue asynchronously
-        bus.post(event).asynchronously(); // same as above
-        bus.publish(subEvent);   // will return after each handler has been invoked
-        bus.post(subEvent).now(); // same as above
+> Custom error handling
 
-<h2>Installation</h2>
-This project contains a maven repository that will allow you to import MBassador as a dependency into your maven project.
-Currently this is all that will be provided because publishing to a central repository requires extra project setup that
-will be done as soon as enough people use this component. Until then, the following steps are necessary:
+Errors during message delivery are sent to all registered error handlers which can be added to the bus as necessary.
 
- 1. Add the repository location to your pom.xml
-    <pre><code class="xml">
-    &lt;repositories&gt;
-        &lt;repository&gt;
-            &lt;id&gt;mbassador-github-repo&lt;/id&gt;
-            &lt;url&gt;https://raw.github.com/bennidi/mbassador/master/maven &lt;/url&gt;
-        &lt;/repository&gt;
-    &lt;/repositories&gt;
-    </pre></code>
- 2. Add the MBassador dependency to your pom.xml. You can check which versions are available by browsing
-    the git repository online.
-    <pre><code class="xml">
-        &lt;dependency&gt;
-            &lt;groupId&gt;org.mbassy&lt;/groupId&gt;
-            &lt;artifactId&gt;mbassador&lt;/artifactId&gt;
-            &lt;version&gt;1.0.0.RC&lt;/version&gt;
-        &lt;/dependency&gt;
-    </pre></code>
- 3. Run mvn clean package to have maven download and install the required version into your local repository
+> Extensibility
 
-Of course you can always clone the repository and build from source
+MBassador is designed to be extensible with custom implementations of various components like message dispatchers and handler invocations (using the decorator pattern), metadata reader (you can add your own annotations) and factories for different kinds of objects. A configuration object is used to customize the different configurable parts, see [Features](https://github.com/bennidi/mbassador/wiki/Components#Feature)
 
-<h2>Roadmap</h2>
-+ Checkout MBassador from one of the official maven repositories (as soon as the user base is big enough)
-+ Spring integration with support for conditional message dispatch in transactional context (dispatch only after
-successful commit etc.). Currently in beta, see <a href="https://github.com/bennidi/mbassador-spring">this</a> repository
-+ MessageEnvelope for each dispatch that is passed to the handler and can be used for communication between handlers
-during the running dispatch
+## Installation
+MBassador is available from the Maven Central Repository using the following coordinates:
+
+```xml
+
+<dependency>
+    <groupId>net.engio</groupId>
+    <artifactId>mbassador</artifactId>
+    <version>{see.git.tags.for.latest.version}</version>
+</dependency>
+
+```
+
+You can also download binary release and javadoc from the [maven central repository](http://search.maven.org/#search|ga|1|mbassador). Of course you can always clone the repository and build from source.
+
+## Documentation
+There is ongoing effort to extend documentation and provide code samples and detailed explanations of how the message bus works. Code samples can also be found in the various test cases. Please read about the terminology used in this project to avoid confusion and misunderstanding.
+
++ [javadoc](http://bennidi.github.io/mbassador/)
++ [wiki](wiki)
++ API examples on programcreek: [Handler](http://www.programcreek.com/java-api-examples/index.php?api=net.engio.mbassy.listener.Handler), [BusConfiguration](http://www.programcreek.com/java-api-examples/index.php?api=net.engio.mbassy.bus.config.BusConfiguration), [MBassador](http://www.programcreek.com/java-api-examples/index.php?api=net.engio.mbassy.bus.MBassador)
 
 
-<h2>Credits</h2>
-The initial inspiration for creating this component came from looking at Google Guava's event bus implementation. Since
-it did not provide all the features we needed in our project, I decided to create my own implementation. When I saw that
-it outperformed the Guava implementation by far, I decided to share it with the community to see if others consider it worth
-a shot.
+## Integrations
 
-<h2>Contribute</h2>
+There is a [spring-extension](https://github.com/bennidi/mbassador-spring) available to support CDI-like transactional message sending in a Spring environment. This is a good example of integration with other frameworks. Another example is the [Guice integration](https://github.com/bennidi/mbassador/wiki/Guice-Integration).
 
-Any feature requests and feedback are more than welcome. You may suggest improvements either by submitting an
-issue or by forking the repo and creating a pull request. I will try to respond as quickly as possible.
 
-<h2>License</h2>
+## Credits
+The initial inspiration for creating this component comes from Google Guava's event bus implementation.
+I liked the simplicity of its design and I trust in the code quality of google libraries. Unfortunately it uses strong references only.
+
+Thanks to all [contributors](https://github.com/bennidi/mbassador/pulls?q=is%3Apr+is%3Aclosed), especially
++ [arne-vandamme](http://github.com/arne-vandamme) for adding support for [meta-annotations](https://github.com/bennidi/mbassador/pull/74)
++ [Bernd Rosstauscher](http://github.com/Rossi1337) for providing an initial integration with JUEL
++ [David Sowerby](http://github.com/davidsowerby) for answering user questions, his tutorial on [guice integration](bennidi/mbassador/wiki/guice-integration) and his various PRs
++ [dorkbox](http://github.com/dorkbox) for various PRs and his [work on performance tuning](http://github.com/bennidi/eventbus-performance/issues/1) which is still to be integrated
++ [durron597](http://github.com/durron597) for his many PRs and the help he offered to other users
+
+Many thanks also to ej-technologies for providing an open source license of 
+[![JProfiler](http://www.ej-technologies.com/images/banners/jprofiler_small.png)](http://www.ej-technologies.com/products/jprofiler/overview.html) and Jetbrains for a license of [IntelliJ IDEA](http://www.jetbrains.com/idea/)
+
+OSS used by MBassador: [jUnit](http://www.junit.org) | [maven](http://www.maven.org) | [mockito](http://www.mockito.org) | [slf4j](http://www.slf4j.org) | [Odysseus JUEL](http://juel.sourceforge.net/guide/start.html)
+
+
+## Contribute
+
+Pick an issue from the list of open issues and start implementing. Make your PRs small and provide test code! Take a look at [this issue](bennidi/mbassador#109) for a good example.
+
+> Note: Due to the complexity of the data structure and synchronization code it took quite a while to get a stable core. New features will only be implemented if they do not require significant modification to the core. The primary focus of MBassador is to provide high-performance extended pub/sub.
+
+Sample code and documentation are both very appreciated contributions. Especially integration with different frameworks is of great value. Feel free and welcome to create Wiki pages to share your code and ideas. Example: [Guice integration](https://github.com/bennidi/mbassador/wiki/Guice-Integration)
+
+## License
 
 This project is distributed under the terms of the MIT License. See file "LICENSE" for further reference.
-
-
-
-
-
-
